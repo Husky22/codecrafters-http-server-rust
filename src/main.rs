@@ -1,10 +1,74 @@
 // Uncomment this block to pass the first stage
-use std::{net::TcpListener, io::{Write, Read}, collections::HashMap};
+use std::{net::{TcpListener, TcpStream}, io::{Write, Read}, collections::HashMap, thread};
 use anyhow::{Result, Context};
 use itertools::Itertools;
 mod response;
 
 use response::{HttpResponse, ResponseBody, StatusCode};
+
+
+fn handle_stream(mut stream: TcpStream) -> Result<()> {
+    let mut input_buf: [u8; 128] = [0; 128];
+    stream.read(&mut input_buf)?;
+
+    let input_string = String::from_utf8(input_buf.to_vec())?;
+    let path = extract_path(&input_string);
+    let headers = extract_headers(&input_string)?;
+
+
+    if let Some(p) = path {
+        match p.trim_start_matches("/")
+            .trim_end_matches("/")
+            .split("/")
+            .collect_vec()
+            .as_slice() 
+            {
+                [""] => {
+                    let response = HttpResponse {
+                        status_code: StatusCode::Ok,
+                        body: None
+                    };
+                    write!(stream, "{}", response)?;
+                    stream.flush()?;
+                },
+                ["echo", val @ ..] => {
+                    let random_string = val.join("/");
+                    let response = HttpResponse {
+                        status_code: StatusCode::Ok,
+                        body: Some(ResponseBody{
+                            content_type: "text/plain".into(),
+                            content: random_string
+                        })
+                    };
+                    write!(stream, "{}", response)?;
+                    stream.flush()?;
+
+                },
+                ["user-agent"] => {
+                    let response = HttpResponse {
+                        status_code: StatusCode::Ok,
+                        body: Some(ResponseBody{
+                            content_type: "text/plain".into(),
+                            content: headers.get("User-Agent").context("Header User-Agent not found")?.to_owned()
+                        })
+                    };
+                    write!(stream, "{}", response)?;
+                    stream.flush()?;
+
+                },
+                _ => {
+                    let response = HttpResponse {
+                        status_code: StatusCode::NotFound,
+                        body: None
+                    };
+                    write!(stream, "{}", response)?;
+                    stream.flush()?;
+                },
+
+            };
+    };
+    Ok(())
+}
 
 fn main() -> Result<()>{
 
@@ -12,68 +76,10 @@ fn main() -> Result<()>{
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 println!("accepted new connection");
+                thread::spawn(|| handle_stream(stream));
 
-                let mut input_buf: [u8; 128] = [0; 128];
-                stream.read(&mut input_buf)?;
-
-                let input_string = String::from_utf8(input_buf.to_vec())?;
-                let path = extract_path(&input_string);
-                let headers = extract_headers(&input_string)?;
-
-
-                if let Some(p) = path {
-                    match p.trim_start_matches("/")
-                        .trim_end_matches("/")
-                        .split("/")
-                        .collect_vec()
-                        .as_slice() 
-                        {
-                            [""] => {
-                                let response = HttpResponse {
-                                    status_code: StatusCode::Ok,
-                                    body: None
-                                };
-                                write!(stream, "{}", response)?;
-                                stream.flush()?;
-                            },
-                            ["echo", val @ ..] => {
-                                let random_string = val.join("/");
-                                let response = HttpResponse {
-                                    status_code: StatusCode::Ok,
-                                    body: Some(ResponseBody{
-                                        content_type: "text/plain".into(),
-                                        content: random_string
-                                    })
-                                };
-                                write!(stream, "{}", response)?;
-                                stream.flush()?;
-
-                            },
-                            ["user-agent"] => {
-                                let response = HttpResponse {
-                                    status_code: StatusCode::Ok,
-                                    body: Some(ResponseBody{
-                                        content_type: "text/plain".into(),
-                                        content: headers.get("User-Agent").context("Header User-Agent not found")?.to_owned()
-                                    })
-                                };
-                                write!(stream, "{}", response)?;
-                                stream.flush()?;
-
-                            },
-                            _ => {
-                                let response = HttpResponse {
-                                    status_code: StatusCode::NotFound,
-                                    body: None
-                                };
-                                write!(stream, "{}", response)?;
-                                stream.flush()?;
-                            },
-
-                        }
-                }
             }
 
             Err(e) => {
