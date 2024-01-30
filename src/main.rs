@@ -1,6 +1,7 @@
 // Uncomment this block to pass the first stage
 use std::{net::TcpListener, io::{Write, Read}};
-use anyhow::{Result, anyhow, Context};
+use anyhow::Result;
+use itertools::Itertools;
 
 fn main() -> Result<()>{
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -25,9 +26,23 @@ fn main() -> Result<()>{
                         stream.write(b"HTTP/1.1 200 OK\r\n\r\n")?;
                         stream.flush()?;
                     },
-                    Some(_) => {
-                        stream.write(b"HTTP/1.1 404 NOT FOUND\r\n\r\n")?;
-                        stream.flush()?;
+                    Some(a) => {
+                        dbg!(a);
+                        let mut args = a.split("/").skip(1);
+
+                        match args.next() {
+                            Some("echo") => {
+                                let random_string = args.join("/");
+                                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}\r\n", random_string.len(), random_string)?;
+                                dbg!(random_string.clone());
+                                stream.flush()?;
+
+                            },
+                            _ => {
+                                stream.write(b"HTTP/1.1 404 NOT FOUND\r\n\r\n")?;
+                                stream.flush()?;
+                            },
+                        }
                     },
                     None => todo!(),
                 }
@@ -61,5 +76,12 @@ mod test {
         let path = extract_path(&input);
         assert_eq!(path, Some("/index.html"));
         Ok(())
+    }
+
+    #[test]
+    fn test_extract_echo_string() {
+
+        let input = "/echo/home".to_string();
+        assert_eq!(input.split("/").collect_vec(),vec!["echo".to_string(), "home".to_string()]);
     }
 }
