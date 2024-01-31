@@ -26,7 +26,7 @@ impl Display for ResponseBody {
 }
 
 
-impl Display for HttpResponse {
+impl Display for HttpResponse{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.status_code {
             StatusCode::Ok => {

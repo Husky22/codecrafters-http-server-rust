@@ -1,15 +1,30 @@
 // Uncomment this block to pass the first stage
-use std::collections::HashMap;
-use tokio::{net::{TcpStream, TcpListener}, io::{AsyncWriteExt, AsyncReadExt}};
+use std::{collections::HashMap, path::Path, sync::Arc};
+use tokio::{net::{TcpStream, TcpListener}, io::{AsyncWriteExt, AsyncReadExt}, fs};
 use anyhow::{Result, Context};
 use itertools::Itertools;
+use clap::Parser;
+
+
 mod response;
 
 use response::{HttpResponse, ResponseBody, StatusCode};
 
 
-async fn handle_stream(mut stream: TcpStream) -> Result<()> {
-    let mut input_buf: [u8; 128] = [0; 128];
+const NOT_FOUND_RESPONSE: HttpResponse = HttpResponse {
+    status_code: StatusCode::NotFound,
+    body: None
+};
+
+async fn send(mut stream: TcpStream, response: HttpResponse) -> Result<()> {
+    stream.write_all(format!("{}", response).as_bytes()).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+
+async fn handle_stream(mut stream: TcpStream, directory: Arc<Option<Box<Path>>>) -> Result<()> {
+    let mut input_buf: [u8; 1024] = [0; 1024];
     stream.read(&mut input_buf).await?;
 
     let input_string = String::from_utf8(input_buf.to_vec())?;
@@ -29,8 +44,7 @@ async fn handle_stream(mut stream: TcpStream) -> Result<()> {
                         status_code: StatusCode::Ok,
                         body: None
                     };
-                    stream.write_all(format!("{}", response).as_bytes()).await?;
-                    stream.flush().await?;
+                    send(stream, response).await?;
                 },
                 ["echo", val @ ..] => {
                     let random_string = val.join("/");
@@ -41,9 +55,7 @@ async fn handle_stream(mut stream: TcpStream) -> Result<()> {
                             content: random_string
                         })
                     };
-                    stream.write_all(format!("{}", response).as_bytes()).await?;
-                    stream.flush().await?;
-
+                    send(stream, response).await?;
                 },
                 ["user-agent"] => {
                     let response = HttpResponse {
@@ -53,17 +65,37 @@ async fn handle_stream(mut stream: TcpStream) -> Result<()> {
                             content: headers.get("User-Agent").context("Header User-Agent not found")?.to_owned()
                         })
                     };
-                    stream.write_all(format!("{}", response).as_bytes()).await?;
-                    stream.flush().await?;
+                    send(stream, response).await?;
+
+                },
+                ["files", val @ ..] => {
+                    let file_path = directory.as_ref().as_ref().map(|s| s.join(val.join("/")));
+
+                    match file_path {
+                        Some(dir) => {
+                            if dir.exists() {
+                                let content = fs::read_to_string(dir).await?;
+                                let response = HttpResponse {
+                                    status_code: StatusCode::Ok,
+                                    body: Some(ResponseBody{
+                                        content_type: "application/octet-stream".into(),
+                                        content
+                                    })
+                                };
+                                send(stream, response).await?;
+
+                            } else {
+                                send(stream, NOT_FOUND_RESPONSE).await?;
+                            }
+                        },
+                        None => send(stream, NOT_FOUND_RESPONSE).await?,
+                    }
+
+
 
                 },
                 _ => {
-                    let response = HttpResponse {
-                        status_code: StatusCode::NotFound,
-                        body: None
-                    };
-                    stream.write_all(format!("{}", response).as_bytes()).await?;
-                    stream.flush().await?;
+                    send(stream, NOT_FOUND_RESPONSE).await?;
                 },
 
             };
@@ -71,15 +103,27 @@ async fn handle_stream(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long)]
+    directory: Option<Box<Path>>
+}
+
 #[tokio::main]
 async fn main() -> Result<()>{
+    let args = Args::parse();
+
+    let dir = Arc::new(args.directory);
 
     let listener = TcpListener::bind("127.0.0.1:4221").await?;
 
     loop {
+        let dir = dir.clone();
         // The second item contains the IP and port of the new connection.
         let (socket, _) = listener.accept().await.unwrap();
-        tokio::spawn(async move { handle_stream(socket).await});
+        tokio::spawn(async move { handle_stream(socket, dir).await});
         
     }
 }
