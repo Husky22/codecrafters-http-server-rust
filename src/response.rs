@@ -2,7 +2,18 @@ use std::fmt::Display;
 
 pub enum StatusCode {
     Ok,
-    NotFound
+    NotFound,
+    Created,
+}
+
+impl Display for StatusCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StatusCode::Ok => write!(f,"HTTP/1.1 200 OK"),
+            StatusCode::NotFound => write!(f,"HTTP/1.1 404 NOT FOUND"),
+            StatusCode::Created => write!(f,"HTTP/1.1 201 CREATED"),
+        }
+    }
 }
 
 pub struct HttpResponse {
@@ -28,18 +39,11 @@ impl Display for ResponseBody {
 
 impl Display for HttpResponse{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.status_code {
-            StatusCode::Ok => {
-                let mut lines = format!("HTTP/1.1 200 OK");
+        let mut lines = format!("{}", self.status_code);
 
-                if let Some(body) = &self.body {
-                    lines = format!("{}\r\n{}", lines, body);
-                }
-                write!(f, "{}\r\n\r\n", lines)
-            },
-            StatusCode::NotFound => {
-                write!(f, "HTTP/1.1 404 NOT FOUND\r\n\r\n")
-            },
+        if let Some(body) = &self.body {
+            lines = format!("{}\r\n{}", lines, body);
         }
+        write!(f, "{}\r\n\r\n", lines)
     }
 }

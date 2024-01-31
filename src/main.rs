@@ -1,4 +1,3 @@
-// Uncomment this block to pass the first stage
 use std::{collections::HashMap, path::Path, sync::Arc};
 use tokio::{net::{TcpStream, TcpListener}, io::{AsyncWriteExt, AsyncReadExt}, fs};
 use anyhow::{Result, Context};
@@ -27,26 +26,30 @@ async fn handle_stream(mut stream: TcpStream, directory: Arc<Option<Box<Path>>>)
     let mut input_buf: [u8; 1024] = [0; 1024];
     stream.read(&mut input_buf).await?;
 
-    let input_string = String::from_utf8(input_buf.to_vec())?;
+    let input_string = String::from_utf8(input_buf.to_vec())?
+        .trim_matches(char::from(0))
+        .to_owned();
+    
     let path = extract_path(&input_string);
+    let request_type = extract_request_type(&input_string).context("No Request Type")?;
     let headers = extract_headers(&input_string)?;
 
 
     if let Some(p) = path {
-        match p.trim_start_matches("/")
+        match (request_type, p.trim_start_matches("/")
             .trim_end_matches("/")
             .split("/")
             .collect_vec()
-            .as_slice() 
+            .as_slice())
             {
-                [""] => {
+                ("GET", [""]) => {
                     let response = HttpResponse {
                         status_code: StatusCode::Ok,
                         body: None
                     };
                     send(stream, response).await?;
                 },
-                ["echo", val @ ..] => {
+                ("GET", ["echo", val @ ..]) => {
                     let random_string = val.join("/");
                     let response = HttpResponse {
                         status_code: StatusCode::Ok,
@@ -57,7 +60,7 @@ async fn handle_stream(mut stream: TcpStream, directory: Arc<Option<Box<Path>>>)
                     };
                     send(stream, response).await?;
                 },
-                ["user-agent"] => {
+                ("GET", ["user-agent"]) => {
                     let response = HttpResponse {
                         status_code: StatusCode::Ok,
                         body: Some(ResponseBody{
@@ -68,7 +71,7 @@ async fn handle_stream(mut stream: TcpStream, directory: Arc<Option<Box<Path>>>)
                     send(stream, response).await?;
 
                 },
-                ["files", val @ ..] => {
+                ("GET", ["files", val @ ..]) => {
                     let file_path = directory.as_ref().as_ref().map(|s| s.join(val.join("/")));
 
                     match file_path {
@@ -81,6 +84,28 @@ async fn handle_stream(mut stream: TcpStream, directory: Arc<Option<Box<Path>>>)
                                         content_type: "application/octet-stream".into(),
                                         content
                                     })
+                                };
+                                send(stream, response).await?;
+
+                            } else {
+                                send(stream, NOT_FOUND_RESPONSE).await?;
+                            }
+                        },
+                        None => send(stream, NOT_FOUND_RESPONSE).await?,
+                    }
+                },
+                ("POST", ["files", val @ ..]) => {
+                    let file_path = directory.as_ref().as_ref().map(|s| s.join(val.join("/")));
+                    let contents = extract_body(&input_string).context("no body found")?;
+
+
+                    match file_path {
+                        Some(dir) => {
+                            if !dir.exists() {
+                                fs::write(dir, contents).await?;
+                                let response = HttpResponse {
+                                    status_code: StatusCode::Created,
+                                    body: None
                                 };
                                 send(stream, response).await?;
 
@@ -134,6 +159,19 @@ fn extract_path(input: &str) -> Option<&str> {
         .take(1)
         .flat_map(|x| x.split(" "))
         .nth(1)
+}
+
+fn extract_body(input: &str) -> Option<&str> {
+    input.split("\r\n\r\n")
+        .nth(1)
+}
+
+fn extract_request_type(input: &str) -> Option<&str> {
+    input
+        .split("\r\n")
+        .take(1)
+        .flat_map(|x| x.split(" "))
+        .nth(0)
 }
 
 fn extract_headers(input: &str) -> Result<HashMap<String, String>> {
