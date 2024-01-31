@@ -1,5 +1,6 @@
 // Uncomment this block to pass the first stage
-use std::{net::{TcpListener, TcpStream}, io::{Write, Read}, collections::HashMap, thread};
+use std::collections::HashMap;
+use tokio::{net::{TcpStream, TcpListener}, io::{AsyncWriteExt, AsyncReadExt}};
 use anyhow::{Result, Context};
 use itertools::Itertools;
 mod response;
@@ -7,9 +8,9 @@ mod response;
 use response::{HttpResponse, ResponseBody, StatusCode};
 
 
-fn handle_stream(mut stream: TcpStream) -> Result<()> {
+async fn handle_stream(mut stream: TcpStream) -> Result<()> {
     let mut input_buf: [u8; 128] = [0; 128];
-    stream.read(&mut input_buf)?;
+    stream.read(&mut input_buf).await?;
 
     let input_string = String::from_utf8(input_buf.to_vec())?;
     let path = extract_path(&input_string);
@@ -28,8 +29,8 @@ fn handle_stream(mut stream: TcpStream) -> Result<()> {
                         status_code: StatusCode::Ok,
                         body: None
                     };
-                    write!(stream, "{}", response)?;
-                    stream.flush()?;
+                    stream.write_all(format!("{}", response).as_bytes()).await?;
+                    stream.flush().await?;
                 },
                 ["echo", val @ ..] => {
                     let random_string = val.join("/");
@@ -40,8 +41,8 @@ fn handle_stream(mut stream: TcpStream) -> Result<()> {
                             content: random_string
                         })
                     };
-                    write!(stream, "{}", response)?;
-                    stream.flush()?;
+                    stream.write_all(format!("{}", response).as_bytes()).await?;
+                    stream.flush().await?;
 
                 },
                 ["user-agent"] => {
@@ -52,8 +53,8 @@ fn handle_stream(mut stream: TcpStream) -> Result<()> {
                             content: headers.get("User-Agent").context("Header User-Agent not found")?.to_owned()
                         })
                     };
-                    write!(stream, "{}", response)?;
-                    stream.flush()?;
+                    stream.write_all(format!("{}", response).as_bytes()).await?;
+                    stream.flush().await?;
 
                 },
                 _ => {
@@ -61,8 +62,8 @@ fn handle_stream(mut stream: TcpStream) -> Result<()> {
                         status_code: StatusCode::NotFound,
                         body: None
                     };
-                    write!(stream, "{}", response)?;
-                    stream.flush()?;
+                    stream.write_all(format!("{}", response).as_bytes()).await?;
+                    stream.flush().await?;
                 },
 
             };
@@ -70,25 +71,17 @@ fn handle_stream(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()>{
+#[tokio::main]
+async fn main() -> Result<()>{
 
-    let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:4221").await?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                println!("accepted new connection");
-                thread::spawn(|| handle_stream(stream));
-
-            }
-
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+    loop {
+        // The second item contains the IP and port of the new connection.
+        let (socket, _) = listener.accept().await.unwrap();
+        tokio::spawn(async move { handle_stream(socket).await});
+        
     }
-
-    Ok(())
 }
 
 fn extract_path(input: &str) -> Option<&str> {
